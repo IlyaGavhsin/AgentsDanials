@@ -1,8 +1,9 @@
 import logging
+import os
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 
-TOKEN = "8879552177:AAGa1KwVygs0vHZCurSGV1s7lwBMtZbgkQo"
+TOKEN = os.environ["TOKEN"]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -32,5 +33,4 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("Бот запущен. Нажмите Ctrl+C для остановки.")
-    import asyncio
-    asyncio.run(app.run_polling())
+    app.run_polling()
