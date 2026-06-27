@@ -199,38 +199,40 @@ def build_report() -> str:
     m = metrics_for(metrics_rows, yesterday.day, yesterday.month)
 
     greeting = random.choice(GREETINGS)
+    yday = yesterday.strftime("%d.%m")
+    tday = today.strftime("%d.%m")
     lines = [
         greeting,
         "",
         "Делюсь отчётом по продажам к текущему моменту 📊",
         "",
-        "💰 *Получили чистыми вчера*",
+        f"💰 Получили чистыми вчера ({yday})",
         f"{money(rev_yday)} ₽",
         "",
-        "💰 *Получили чистыми сегодня*",
+        f"💰 Получили чистыми сегодня ({tday})",
         f"{money(rev_today)} ₽",
         "",
-        "📈 *Итоги с 18 мая:*",
-        f"ИТОГО чистыми: *{money(total_launch)} ₽* 🔥",
+        "📈 Итоги с 18 мая:",
+        f"Чистыми: {money(total_launch)} ₽ 🔥",
         "",
-        f"🎯 *Воронка за вчера ({yesterday.strftime('%d.%m')}):*",
-        f"👥 Лидов всего — {m['leads']:.0f}",
-        f"🔔 Пуши — {m['push']:.0f}",
-        f"✅ Продаж — {m['sales']:.0f}",
-        f"🔕 Игнор — {m['ignore']:.0f}",
-        f"❌ Отказы — {m['refusal']:.0f}",
+        f"Воронка за вчера ({yday}):",
+        f"👥 Лидов всего — {m['leads']:.0f} ·",
+        f"🔔 Пуши — {m['push']:.0f} ·",
+        f"✅ Продаж — {m['sales']:.0f} ·",
+        f"🔕 Игнор — {m['ignore']:.0f} ·",
+        f"❌ Отказы — {m['refusal']:.0f} ·",
         f"🌱 Потенциалы — {m['potential']:.0f}",
         "",
-        "🏆 *Продажи менеджеров с 18 мая:*",
+        "🏆 Продажи менеджеров с 18 мая:",
     ]
     for name, lt in per_manager:
-        lines.append(f"• {name} — {money(lt)} ₽")
+        lines.append(f"· {name} — {money(lt)} ₽")
     return "\n".join(lines)
 
 
 async def send_report(bot, chat_id):
     report = await asyncio.to_thread(build_report)
-    await bot.send_message(chat_id=chat_id, text=report, parse_mode="Markdown")
+    await bot.send_message(chat_id=chat_id, text=report)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
