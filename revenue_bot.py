@@ -28,8 +28,10 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 TOKEN = os.environ["TOKEN"]
-# Чат, куда слать ежедневный отчёт в 12:00 МСК (id группы). Если не задан — шлём только по тегу.
+# Чат, куда слать ежедневный отчёт (id группы). Если не задан — шлём только по тегу.
 REPORT_CHAT_ID = os.environ.get("REPORT_CHAT_ID")
+# Время ежедневной отправки по МСК в формате ЧЧ:ММ (по умолчанию 12:00).
+REPORT_TIME = os.environ.get("REPORT_TIME", "12:00")
 
 MSK = ZoneInfo("Europe/Moscow")
 
@@ -254,13 +256,29 @@ async def daily_job(context: ContextTypes.DEFAULT_TYPE):
     await send_report(context.bot, REPORT_CHAT_ID)
 
 
+def parse_report_time(value: str) -> time:
+    """Парсит 'ЧЧ:ММ' в time по МСК. При ошибке — 12:00."""
+    try:
+        hour, minute = (int(x) for x in value.strip().split(":"))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            raise ValueError
+        return time(hour=hour, minute=minute, tzinfo=MSK)
+    except (ValueError, AttributeError):
+        logger.warning("Неверный REPORT_TIME=%r, использую 12:00", value)
+        return time(hour=12, minute=0, tzinfo=MSK)
+
+
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     if REPORT_CHAT_ID:
-        app.job_queue.run_daily(daily_job, time=time(hour=12, minute=0, tzinfo=MSK))
-        logger.info("Ежедневный отчёт в 12:00 МСК включён для чата %s", REPORT_CHAT_ID)
+        report_time = parse_report_time(REPORT_TIME)
+        app.job_queue.run_daily(daily_job, time=report_time)
+        logger.info(
+            "Ежедневный отчёт в %02d:%02d МСК включён для чата %s",
+            report_time.hour, report_time.minute, REPORT_CHAT_ID,
+        )
     else:
         logger.warning("REPORT_CHAT_ID не задан — ежедневная отправка отключена.")
 
