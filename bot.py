@@ -1,15 +1,16 @@
-"""Telegram-бот с двумя функциями (реагирует на упоминание @бот):
+"""Telegram-бот с двумя командами:
 
-1) Подсчёт символов — пишешь боту текст, он считает символы с пробелами и без.
-2) Логическое сокращение текста до нужного объёма (в символах или процентах)
-   с помощью Claude (Anthropic). Сокращаемый текст берётся из сообщения, на
-   которое ты отвечаешь (reply), либо после двоеточия в самом сообщении.
+  /count <текст>          — посчитать символы (с пробелами и без).
+  /short <объём> <текст>  — логически сократить текст до объёма (символы или %)
+                            с помощью Claude (Anthropic).
+
+Текст можно дать после команды ИЛИ ответить командой на сообщение с текстом.
 
 Примеры:
-   @бот сюда любой текст                  → посчитает символы
-   (ответом на текст) @бот сократи до 500 → ужмёт до ~500 символов
-   (ответом на текст) @бот сократи до 50% → ужмёт примерно вдвое
-   @бот сократи до 300: длинный текст...  → ужмёт текст после двоеточия
+  /count привет мир
+  /short 500 длинный текст...      → ужмёт до ~500 символов
+  /short 50% длинный текст...      → ужмёт примерно вдвое
+  (ответом на сообщение) /short 500
 """
 
 import asyncio
@@ -17,19 +18,21 @@ import logging
 import os
 import re
 
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram import BotCommand, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    ContextTypes,
+)
 
 TOKEN = os.environ["TOKEN"]
-# Ключ Anthropic нужен только для функции сокращения. Без него считалка символов работает.
+# Ключ Anthropic нужен только для /short. Без него /count всё равно работает.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-SHORTEN_WORDS = ("сократи", "сократить", "сокращ", "короче", "ужми", "сожми", "укороти")
 
 
 def count_symbols(text: str) -> str:
@@ -39,6 +42,27 @@ def count_symbols(text: str) -> str:
         f"Символов с пробелами: {total}\n"
         f"Символов без пробелов: {without_spaces}"
     )
+
+
+def extract_target(s: str):
+    """Достаёт объём сокращения из строки и возвращает (chars, percent, остаток_текста).
+
+    Понимает «500», «до 500 символов», «50%», «до 30 %».
+    """
+    pct = re.search(r"(\d+)\s*%", s)
+    if pct:
+        leftover = s[: pct.start()] + s[pct.end():]
+        return None, max(1, min(99, int(pct.group(1)))), _clean(leftover)
+    num = re.search(r"(\d+)\s*(?:символ\w*|знак\w*|зн\b)?", s)
+    if num and num.group(1):
+        leftover = s[: num.start()] + s[num.end():]
+        return int(num.group(1)), None, _clean(leftover)
+    return None, None, _clean(s)
+
+
+def _clean(s: str) -> str:
+    s = re.sub(r"\b(до|примерно)\b", "", s, flags=re.IGNORECASE)
+    return s.strip(" :\n\t")
 
 
 def shorten_text(text: str, target_chars: int | None, target_percent: int | None) -> str:
@@ -67,81 +91,50 @@ def shorten_text(text: str, target_chars: int | None, target_percent: int | None
     return "".join(b.text for b in message.content if b.type == "text").strip()
 
 
-def parse_target(instruction: str):
-    """Достаёт цель сокращения. Возвращает (target_chars, target_percent) — одно из них."""
-    pct = re.search(r"(\d+)\s*%", instruction)
-    if pct:
-        return None, max(1, min(99, int(pct.group(1))))
-    # «до 500 символов» / «до 500 знаков» / просто «до 500»
-    chars = re.search(r"(\d+)\s*(?:символ\w*|знак\w*|зн\b)", instruction.lower())
-    if chars:
-        return int(chars.group(1)), None
-    num = re.search(r"\b(?:до|примерно)\s*(\d+)", instruction.lower()) or re.search(
-        r"(\d+)", instruction
-    )
-    if num:
-        return int(num.group(1)), None
-    return None, None
+def _reply_text(update: Update) -> str:
+    reply = update.message.reply_to_message
+    return reply.text if (reply and reply.text) else ""
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def count_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = " ".join(context.args).strip() if context.args else ""
+    if not text:
+        text = _reply_text(update)
+    if not text:
+        await update.message.reply_text(
+            "Дай текст: `/count привет мир` или ответь командой /count на сообщение."
+        )
+        return
+    await update.message.reply_text(count_symbols(text))
+
+
+async def short_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    if not message or not message.text:
-        return
+    raw = " ".join(context.args).strip() if context.args else ""
 
-    bot_username = (await context.bot.get_me()).username
-    mention = f"@{bot_username}"
-    if mention.lower() not in message.text.lower():
-        return
+    target_chars, target_percent, leftover = extract_target(raw)
 
-    body = re.sub(re.escape(mention), "", message.text, flags=re.IGNORECASE).strip()
-    lower = body.lower()
-
-    wants_shorten = (
-        any(w in lower for w in SHORTEN_WORDS)
-        or re.search(r"\d+\s*%", body)
-        or re.search(r"\d+\s*(?:символ|знак)", lower)
-    )
-
-    if not wants_shorten:
-        # Функция 1 — подсчёт символов (поведение по умолчанию)
-        await message.reply_text(count_symbols(body))
-        return
-
-    # Функция 2 — сокращение
-    if not ANTHROPIC_API_KEY:
-        await message.reply_text(
-            "Для сокращения нужен ключ Anthropic. Добавь переменную "
-            "ANTHROPIC_API_KEY в настройках бота."
-        )
-        return
-
-    # Откуда берём текст: ответ на сообщение, либо часть после двоеточия
-    if message.reply_to_message and message.reply_to_message.text:
-        source = message.reply_to_message.text
-        instruction = body
-    elif ":" in body:
-        instruction, source = body.split(":", 1)
-        source = source.strip()
-    else:
-        await message.reply_text(
-            "Чтобы сократить текст:\n"
-            "• ответь этим тегом на сообщение с текстом и укажи объём "
-            "(`сократи до 500` или `сократи до 50%`), или\n"
-            "• напиши `сократи до 500: твой текст`"
-        )
-        return
-
-    target_chars, target_percent = parse_target(instruction)
     if target_chars is None and target_percent is None:
         await message.reply_text(
-            "Укажи, до какого объёма сокращать — например `до 500` (символов) "
-            "или `до 50%`."
+            "Укажи объём: `/short 500 текст` (символов) или `/short 50% текст`.\n"
+            "Можно и ответом на сообщение: `/short 500`."
         )
         return
 
+    # источник текста: ответ на сообщение или то, что осталось после объёма
+    source = _reply_text(update) or leftover
     if not source:
-        await message.reply_text("Не вижу текста для сокращения.")
+        await message.reply_text(
+            "Не вижу текста. Напиши его после объёма "
+            "(`/short 500 твой текст`) или ответь командой на сообщение."
+        )
+        return
+
+    if not ANTHROPIC_API_KEY:
+        await message.reply_text(
+            "Для /short нужен ключ Anthropic. Добавь переменную "
+            "ANTHROPIC_API_KEY в настройках бота."
+        )
         return
 
     await context.bot.send_chat_action(chat_id=message.chat_id, action="typing")
@@ -159,8 +152,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Что я умею:\n\n"
+        "📏 /count <текст> — посчитать символы (с пробелами и без).\n"
+        "✂️ /short <объём> <текст> — сократить текст.\n"
+        "   • объём в символах: `/short 500 текст`\n"
+        "   • объём в процентах: `/short 50% текст`\n"
+        "   • можно ответить командой на сообщение: `/short 500`"
+    )
+
+
+async def post_init(app):
+    await app.bot.set_my_commands(
+        [
+            BotCommand("count", "Посчитать символы"),
+            BotCommand("short", "Сократить текст (до N или N%)"),
+            BotCommand("help", "Помощь"),
+        ]
+    )
+
+
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
+    app.add_handler(CommandHandler("count", count_command))
+    app.add_handler(CommandHandler("short", short_command))
+    app.add_handler(CommandHandler(["help", "start"], help_command))
     print("Бот запущен. Нажмите Ctrl+C для остановки.")
     app.run_polling()
