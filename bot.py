@@ -2,7 +2,7 @@
 
   /count <текст>          — посчитать символы (с пробелами и без).
   /short <объём> <текст>  — логически сократить текст до объёма (символы или %)
-                            с помощью Claude (Anthropic).
+                            с помощью DeepSeek.
 
 Текст можно дать после команды ИЛИ ответить командой на сообщение с текстом.
 
@@ -26,8 +26,8 @@ from telegram.ext import (
 )
 
 TOKEN = os.environ["TOKEN"]
-# Ключ Anthropic нужен только для /short. Без него /count всё равно работает.
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+# Ключ DeepSeek нужен только для /short. Без него /count всё равно работает.
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -66,8 +66,8 @@ def _clean(s: str) -> str:
 
 
 def shorten_text(text: str, target_chars: int | None, target_percent: int | None) -> str:
-    """Логически сокращает текст через Claude до заданного объёма."""
-    import anthropic
+    """Логически сокращает текст через DeepSeek до заданного объёма."""
+    from openai import OpenAI
 
     if target_percent is not None:
         instruction = f"Сократи этот текст примерно до {target_percent}% от его исходной длины"
@@ -81,14 +81,16 @@ def shorten_text(text: str, target_chars: int | None, target_percent: int | None
         "Верни ТОЛЬКО сокращённый текст — без кавычек и комментариев."
     )
 
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    message = client.messages.create(
-        model="claude-opus-4-8",
+    client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+    response = client.chat.completions.create(
+        model="deepseek-chat",
         max_tokens=8000,
-        system=system,
-        messages=[{"role": "user", "content": f"{instruction}.\n\nТекст:\n{text}"}],
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": f"{instruction}.\n\nТекст:\n{text}"},
+        ],
     )
-    return "".join(b.text for b in message.content if b.type == "text").strip()
+    return (response.choices[0].message.content or "").strip()
 
 
 def _reply_text(update: Update) -> str:
@@ -130,10 +132,10 @@ async def short_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if not ANTHROPIC_API_KEY:
+    if not DEEPSEEK_API_KEY:
         await message.reply_text(
-            "Для /short нужен ключ Anthropic. Добавь переменную "
-            "ANTHROPIC_API_KEY в настройках бота."
+            "Для /short нужен ключ DeepSeek. Добавь переменную "
+            "DEEPSEEK_API_KEY в настройках бота."
         )
         return
 
