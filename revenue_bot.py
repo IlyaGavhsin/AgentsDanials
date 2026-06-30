@@ -112,16 +112,64 @@ def fetch_rows(table_id: str, gid: str):
     return list(csv.reader(io.StringIO(resp.text)))
 
 
-def launch_total(rows) -> float:
-    """Значение ячейки «Итого чистыми запуск новый» (итог текущего запуска)."""
-    for row in rows:
+def section_starts(rows):
+    """Индексы строк-заголовков запусков (в столбце B текст «Запуск …»)."""
+    return [
+        i for i, row in enumerate(rows)
+        if len(row) > 1 and "запуск" in row[1].strip().lower()
+    ]
+
+
+def label_value(rows, start: int, label: str) -> float:
+    """Первое число после ячейки с текстом label, начиная со строки start."""
+    for row in rows[start:]:
         for j, cell in enumerate(row):
-            if LAUNCH_LABEL in cell.strip().lower():
+            if label in cell.strip().lower():
                 for k in range(j + 1, len(row)):
                     value = parse_num(row[k])
                     if value is not None:
                         return value
     return 0.0
+
+
+def section_net(rows, lo: int, hi: int) -> float:
+    """Чистый итог секции — суммой по строкам продаж (возвраты исключены)."""
+    total = 0.0
+    for row in rows[lo:hi]:
+        if any("озврат" in c.lower() for c in row):
+            continue
+        # строка продажи — там, где заполнена «Сумма» (столбец 4)
+        if len(row) > 6 and parse_num(row[4]) is not None:
+            value = parse_num(row[6])
+            if value:
+                total += value
+    return total
+
+
+def launch_total(rows) -> float:
+    """Чистый итог текущего запуска (с 18 мая).
+
+    Раньше брали готовую ячейку «Итого чистыми запуск новый», но её формула в
+    таблице суммирует фиксированный диапазон и не дотягивается до самых свежих
+    строк продаж — из-за этого итог отставал (на 30.06 недосчёт ~873 тыс.).
+
+    Считаем надёжно сами:
+      • база — замороженный снимок «Итого чистыми запуск новый» из предыдущей
+        секции (месяц до текущего), он уже не меняется;
+      • плюс живой чистый итог текущей (верхней) секции — суммой по строкам,
+        чтобы новые продажи всегда попадали в общий итог.
+    """
+    starts = section_starts(rows)
+    if not starts:
+        # запас на случай нестандартной структуры — старое поведение
+        return label_value(rows, 0, LAUNCH_LABEL)
+
+    top = starts[0]
+    second = starts[1] if len(starts) > 1 else len(rows)
+
+    live = section_net(rows, top, second)
+    base = label_value(rows, second, LAUNCH_LABEL)
+    return base + live
 
 
 def day_revenue(rows, day: int, month: int) -> float:
